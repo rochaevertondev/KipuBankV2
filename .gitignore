@@ -1,0 +1,9 @@
+node_modules/
+artifacts/
+cache/
+build/
+coverage/
+.env
+*.log
+.vscode/
+.DS_Store
