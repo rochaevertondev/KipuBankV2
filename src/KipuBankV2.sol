@@ -2,6 +2,8 @@
 
 pragma solidity ^0.8.20;
 
+import "@openzeppelin/contracts/access/AccessControl.sol";
+
 
 /// @dev Minimal Chainlink Aggregator interface exposing latestAnswer().
 interface AggregatorV3Interface {
@@ -10,7 +12,7 @@ interface AggregatorV3Interface {
 }
 
 
-contract KipuBank {
+contract KipuBank is AccessControl {
     /// @dev Chainlink price feed (latestAnswer returns price with 8 decimals)
     AggregatorV3Interface public priceFeed;
 
@@ -55,6 +57,14 @@ contract KipuBank {
 
     event SuccessfulDeposit(address indexed account, uint256 amount);
     event SuccessfulWithdrawal(address indexed account, uint256 amount);
+    event AdminAdded(address indexed account);
+    event AdminRemoved(address indexed account);
+    event AdminRecovery(address indexed account, uint256 oldBalance, uint256 newBalance);
+
+    /// @dev Role identifier for the owner role used as admin for ADMIN_ROLE.
+    bytes32 public constant OWNER_ROLE = keccak256("OWNER_ROLE");
+    /// @dev Role identifier for admins.
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
 
     /// @param _priceFeed address of the Chainlink price feed (Sepolia ETH/USD)
@@ -73,7 +83,12 @@ contract KipuBank {
             revert InvalidPrice(price);
         }
 
-        ownerBank = msg.sender;
+    ownerBank = msg.sender;
+
+    _grantRole(OWNER_ROLE, msg.sender);
+    _grantRole(ADMIN_ROLE, msg.sender);
+    // grant a dedicated OWNER_ROLE to the deployer and make OWNER_ROLE the admin of ADMIN_ROLE
+    _setRoleAdmin(ADMIN_ROLE, OWNER_ROLE);
     }
 
     /// @notice Allows a user to deposit Ether into the bank.
@@ -129,31 +144,67 @@ contract KipuBank {
         emit SuccessfulWithdrawal(msg.sender, amount);
     }
 
-
-
-    /// @dev A modifier that restricts a function's execution to the contract owner.
-    modifier onlyOwnerBank() {
-        if (msg.sender != ownerBank) {
+    /// @dev A modifier that restricts a function's execution to accounts with OWNER_ROLE.
+    modifier onlyOwner() {
+        if (!hasRole(OWNER_ROLE, msg.sender)) {
             revert NotOwnerBank(msg.sender);
         }
         _;
     }
 
-    function currentBalance() external view onlyOwnerBank returns (uint256 current) {
+    function currentBalance() external view onlyOwner returns (uint256 current) {
         // return the bank total balance expressed in USD with 8 decimals
         return weiToUsd(_kipuBankBalance);
     }
 
-    /// @dev A modifier that restricts a function's execution to the account owner or the bank owner.
-    modifier onlyAccountOwner(address account) {
-        if (msg.sender != account && msg.sender != ownerBank) {
+    /// @dev A modifier that restricts a function's execution to the account owner or any account with ADMIN_ROLE.
+    modifier onlyAccountOwnerOrAdmin(address account) {
+        if (msg.sender != account && !hasRole(ADMIN_ROLE, msg.sender)) {
             revert NotAccountOwner(msg.sender);
         }
         _;
     }
 
-    function getBalance(address account) external view onlyAccountOwner(account) returns (uint256) {
+    function getBalance(address account) external view onlyAccountOwnerOrAdmin(account) returns (uint256) {
         return _balances[account];
+    }
+
+    /// @notice Owner-only: grant ADMIN_ROLE to an account.
+    function addAdmin(address account) external onlyOwner {
+        _grantRole(ADMIN_ROLE, account);
+        emit AdminAdded(account);
+    }
+
+    /// @notice Owner-only: revoke ADMIN_ROLE from an account.
+    function removeAdmin(address account) external onlyOwner {
+        _revokeRole(ADMIN_ROLE, account);
+        emit AdminRemoved(account);
+    }
+
+    /// @notice Admins can adjust a user's internal wei balance to help recover funds.
+    /// @dev Adjusts the total bank balance accordingly. Only callable by ADMIN_ROLE.
+    function recoverUserBalance(address account, uint256 newBalanceWei) external onlyRole(ADMIN_ROLE) {
+        uint256 old = _balances[account];
+        if (newBalanceWei > old) {
+            uint256 delta = newBalanceWei - old;
+            _balances[account] = newBalanceWei;
+            _kipuBankBalance += delta;
+        } else if (newBalanceWei < old) {
+            uint256 delta = old - newBalanceWei;
+            _balances[account] = newBalanceWei;
+            _kipuBankBalance -= delta;
+        } else {
+            // no change
+            return;
+        }
+
+        // Ensure bank cap is not violated after recovery (converted to USD)
+        uint256 bankUsd = weiToUsd(_kipuBankBalance);
+        if (bankUsd > maxUsdBankCap) {
+            revert MaxBankCapReached(maxUsdBankCap - bankUsd);
+        }
+
+        emit AdminRecovery(account, old, newBalanceWei);
     }
 
     /// @notice Returns the latest ETH price in USD with 8 decimals (reverts if price <= 0).
@@ -175,7 +226,7 @@ contract KipuBank {
     }
 
     /// @notice Returns the USD value (8 decimals) of an account's internal balance. Restricted to account or owner.
-    function getBalanceInUsd(address account) external view onlyAccountOwner(account) returns (uint256) {
+    function getBalanceInUsd(address account) external view onlyAccountOwnerOrAdmin(account) returns (uint256) {
         return weiToUsd(_balances[account]);
     }
 }
