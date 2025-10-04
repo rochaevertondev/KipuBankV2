@@ -3,22 +3,29 @@
 pragma solidity ^0.8.20;
 
 
+/// @dev Minimal Chainlink Aggregator interface exposing latestAnswer().
+interface AggregatorV3Interface {
+    /// @notice returns the latest price answer.
+    function latestAnswer() external view returns (int256);
+}
+
+
 contract KipuBank {
-    /// @dev The maximum amount of funds the bank can hold.
-    uint256 public immutable MaxBankCap;
-    /// @dev The maximum amount of Ether that can be withdrawn in a single transaction.
-    uint256 public immutable LimitMaxPerWithdraw;
+    /// @dev Chainlink price feed (latestAnswer returns price with 8 decimals)
+    AggregatorV3Interface public priceFeed;
+
+    /// @dev The maximum USD amount of funds the bank can hold.
+    uint256 public immutable maxUsdBankCap = 10000 * 10 ** 8;
+    /// @dev The maximum amount of USD that can be withdrawn in a single transaction.
+    uint256 public immutable usdWithdrawalLimit = 1000 * 10 ** 8;
     /// @dev The address of the contract's owner, set upon deployment.
-    address public immutable _ownerBank;
-    /// @dev The total amount of Ether held by the contract.
+    address public immutable ownerBank;
+    /// @dev The total amount of wei held by the contract (internal bank balance in wei).
     uint256 private _kipuBankBalance;
-    /// @dev The total count of deposits made.
-    uint256 public _countDeposits;
-    /// @dev The total count of withdrawals made.
-    uint256 public _countWithdrawals;
 
     /// @dev A mapping of addresses to their individual balances.
     mapping(address => uint256) private _balances;
+
 
     /// @notice Error returned when a function is called by an address that is not the bank owner.
     /// @param caller The address that attempted the call.
@@ -29,6 +36,13 @@ contract KipuBank {
     /// @notice Error returned for invalid transaction values.
     /// @param value The invalid value passed in the transaction.
     error InvalidValue(uint256 value);
+    /// @notice Error returned when price feed fails or returns non-positive price.
+    /// @param price The price returned by the feed.
+    error InvalidPrice(int256 price);
+    /// @notice Error returned when the USD equivalent of a withdrawal exceeds the allowed limit.
+    /// @param usdValue The USD value (with 8 decimals) of the attempted withdrawal.
+    /// @param limit The configured USD limit (with 8 decimals).
+    error ExceedsUsdLimit(uint256 usdValue, uint256 limit);
     /// @notice Error returned when the maximum fund limit of the bank is reached.
     /// @param value The amount of funds that exceeds the cap.
     error MaxBankCapReached(uint256 value);
@@ -43,10 +57,23 @@ contract KipuBank {
     event SuccessfulWithdrawal(address indexed account, uint256 amount);
 
 
-    constructor(uint256 _MaxBankCap, uint256 _LimitMaxPerWithdraw) {
-        MaxBankCap = _MaxBankCap;
-        LimitMaxPerWithdraw = _LimitMaxPerWithdraw;
-        _ownerBank = msg.sender;
+    /// @param _priceFeed address of the Chainlink price feed (Sepolia ETH/USD)
+    constructor(address _priceFeed) {
+        // Initialize price feed first (may be needed to compute defaults)
+        if (_priceFeed == address(0)) {
+            priceFeed = AggregatorV3Interface(0x694AA1769357215DE4FAC081bf1f309aDC325306);
+        } else {
+            priceFeed = AggregatorV3Interface(_priceFeed);
+        }
+
+        // If constructor args are zero, compute defaults using current price
+        // Price has 8 decimals: price = USD * 1e8 per 1 ETH
+        int256 price = priceFeed.latestAnswer();
+        if (price <= 0) {
+            revert InvalidPrice(price);
+        }
+
+        ownerBank = msg.sender;
     }
 
     /// @notice Allows a user to deposit Ether into the bank.
@@ -55,28 +82,44 @@ contract KipuBank {
         if (msg.value <= 0) {
             revert InvalidValue(msg.value);
         }
-        if (_kipuBankBalance + msg.value > MaxBankCap) {
-            revert MaxBankCapReached(MaxBankCap - _kipuBankBalance);
+        // Convert current total and incoming deposit to USD (8 decimals) for cap check
+        uint256 currentUsd = weiToUsd(_kipuBankBalance);
+        uint256 depositUsd = weiToUsd(msg.value);
+        if (currentUsd + depositUsd > maxUsdBankCap) {
+            revert MaxBankCapReached(maxUsdBankCap - currentUsd);
         }
 
         _balances[msg.sender] += msg.value;
         _kipuBankBalance += msg.value;
-        _countDeposits ++;
+
 
         emit SuccessfulDeposit(msg.sender, msg.value);
     }
 
  
     function withdraw(uint256 amount) external payable{
-        if (amount <= 0 || amount > LimitMaxPerWithdraw) {
-            revert InvalidValue(LimitMaxPerWithdraw); 
+        // amount is expected in wei
+        if (amount == 0) {
+            revert InvalidValue(amount);
         }
         if (amount > _balances[msg.sender]) {
             revert InsufficientBalance(_balances[msg.sender]);
         }
+
+        // Check USD equivalent using Chainlink price feed (price has 8 decimals)
+        int256 price = priceFeed.latestAnswer();
+        if (price <= 0) {
+            revert InvalidPrice(price);
+        }
+        // amount is in wei (1 ETH = 1e18 wei). To compute USD with 8 decimals:
+        // usd = (amount_in_wei * price) / 1e18
+        // where price has 8 decimals, so usd has 8 decimals.
+        uint256 usdValue = (uint256(price) * amount) / 1e18;
+        if (usdValue > usdWithdrawalLimit) {
+            revert ExceedsUsdLimit(usdValue, usdWithdrawalLimit);
+        }
         _balances[msg.sender] -= amount;
         _kipuBankBalance -= amount;
-        _countWithdrawals ++;
         
         (bool success, ) = payable(msg.sender).call{value: amount}("");
         if (!success) {
@@ -86,29 +129,24 @@ contract KipuBank {
         emit SuccessfulWithdrawal(msg.sender, amount);
     }
 
+
+
     /// @dev A modifier that restricts a function's execution to the contract owner.
     modifier onlyOwnerBank() {
-        if (msg.sender != _ownerBank) {
+        if (msg.sender != ownerBank) {
             revert NotOwnerBank(msg.sender);
         }
         _;
     }
 
-  
     function currentBalance() external view onlyOwnerBank returns (uint256 current) {
-        return _kipuBankBalance;
+        // return the bank total balance expressed in USD with 8 decimals
+        return weiToUsd(_kipuBankBalance);
     }
 
-    function getDeposits() external view onlyOwnerBank returns (uint256 current) {
-        return _countDeposits;
-    }
-
-    function getWithdrawals() external view onlyOwnerBank returns (uint256 current) {
-        return _countWithdrawals;
-    }
-
+    /// @dev A modifier that restricts a function's execution to the account owner or the bank owner.
     modifier onlyAccountOwner(address account) {
-        if (msg.sender != account && msg.sender != _ownerBank) {
+        if (msg.sender != account && msg.sender != ownerBank) {
             revert NotAccountOwner(msg.sender);
         }
         _;
@@ -116,5 +154,28 @@ contract KipuBank {
 
     function getBalance(address account) external view onlyAccountOwner(account) returns (uint256) {
         return _balances[account];
+    }
+
+    /// @notice Returns the latest ETH price in USD with 8 decimals (reverts if price <= 0).
+    function getEthPrice() public view returns (uint256) {
+        int256 price = priceFeed.latestAnswer();
+        if (price <= 0) {
+            revert InvalidPrice(price);
+        }
+        return uint256(price);
+    }
+
+    /// @notice Convert an amount in wei to USD with 8 decimals using the Chainlink feed.
+    /// @param amountWei amount in wei
+    /// @return usdValue USD value with 8 decimals
+    function weiToUsd(uint256 amountWei) public view returns (uint256 usdValue) {
+        uint256 price = getEthPrice();
+        // usd = price(8dec) * wei / 1e18 -> result has 8 decimals
+        usdValue = (price * amountWei) / 1e18;
+    }
+
+    /// @notice Returns the USD value (8 decimals) of an account's internal balance. Restricted to account or owner.
+    function getBalanceInUsd(address account) external view onlyAccountOwner(account) returns (uint256) {
+        return weiToUsd(_balances[account]);
     }
 }
