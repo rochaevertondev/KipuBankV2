@@ -2,7 +2,7 @@
 
 A Solidity smart contract that simulates a simple decentralized bank with **deposit and withdrawal controls**, enforcing **USD-based limits** using a **Chainlink price feed**.
 
-## Feature 1️⃣ WITHDRAWAL LIMITS IN USD ✅
+## 1️⃣ WITHDRAWAL LIMITS IN USD ✅
 
 The contract enforces a **maximum withdrawal per transaction** expressed in **USD** (8 decimals, compatible with Chainlink).
 
@@ -19,13 +19,27 @@ The contract enforces a **maximum withdrawal per transaction** expressed in **US
 
 ---
 
-## Other Features
+## 2️⃣ ADMIN RECOVERY 🔑
 
-- `maxUsdBankCap` (public immutable) — total bank capacity limit in USD with 8 decimals (10000 USD). O `deposit()` converte o depósito e o saldo atual para USD antes de aceitar o depósito.
-- Saldos internos são armazenados em wei (`_balances[address]` e `_kipuBankBalance`), para evitar perda de precisão em ETH.
-- `getEthPrice()` retorna o preço do ETH em USD com 8 decimais (via Chainlink feed).
-- `weiToUsd(uint256)` converte um valor em wei para USD (8 decimais).
-- `getBalanceInUsd(address)` retorna o saldo de uma conta em USD (8 decimais) — protegido para o dono da conta ou o owner do banco.
+This contract uses OpenZeppelin AccessControl and defines two primary roles:
+
+- `OWNER_ROLE` — role that has the authority to add or remove administrators. 
+    Functions controlled by `OWNER_ROLE`:
+    - `addAdmin(address)` — grant an address the `ADMIN_ROLE`.
+    - `removeAdmin(address)` — revoke an address's `ADMIN_ROLE`.
+
+- `ADMIN_ROLE` — role with a narrow, specific power: recover or adjust a user's internal balance when needed. 
+    Functions controlled by `ADMIN_ROLE`:
+    - `recoverUserBalance(address account, uint256 newBalanceWei)` — admins can update an account's internal wei balance to help recover funds. This action emits `AdminRecovery` and adjusts the total internal bank balance accordingly.
+
+Security notes:
+- Only accounts with `OWNER_ROLE` can add or remove admins.
+- `ADMIN_ROLE` does not grant the power to manage roles — it only allows balance recovery.
+- It's recommended to assign `OWNER_ROLE` to a multisig (e.g., Gnosis Safe) to avoid single-point-of-failure key risks.
+
+---
+
+## Other Features
 
 - `maxUsdBankCap` (public immutable) — total bank capacity limit in USD with 8 decimals (10,000 USD).
 The deposit() function converts both the incoming deposit and the total balance to USD before accepting new funds.
@@ -33,6 +47,8 @@ The deposit() function converts both the incoming deposit and the total balance 
 - `getEthPrice()` — returns the current ETH price in USD (8 decimals) using Chainlink.
 - `weiToUsd(uint256)` — converts an amount in wei to its equivalent USD value (8 decimals).
 - `getBalanceInUsd(address)` — returns an account’s balance in USD (8 decimals), restricted to the account owner or the bank owner.
+
+---
 
 ## How to Test in Remix
 
@@ -47,12 +63,8 @@ The deposit() function converts both the incoming deposit and the total balance 
     - `withdraw(amount)` — input amount in wei. The contract will validate the equivalent USD value.
     - Use `getEthPrice()` and `getBalanceInUsd(yourAddress)` for debugging.
 
-## Notes and Limitations
-- All USD values are stored and returned using 8 decimal places, consistent with Chainlink price formatting.
-- The contract depends on the Chainlink price feed. If the feed is unavailable on the selected network, calls to latestAnswer() will revert.
-
 ---
 
 ## 🧑‍💻 Author
 **Rocha Everton (DEV)**  
-📧 [GitHub](https://https://github.com/rochaevertondev/) | 💬 [LinkedIn](https://linkedin.com/in/rochaevertondev/) 
+📧 [GitHub](https://github.com/rochaevertondev/) | 💬 [LinkedIn](https://linkedin.com/in/rochaevertondev/) 
