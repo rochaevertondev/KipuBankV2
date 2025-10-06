@@ -3,6 +3,9 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 
 /// @dev Minimal Chainlink Aggregator interface exposing latestAnswer().
@@ -13,8 +16,12 @@ interface AggregatorV3Interface {
 
 
 contract KipuBank is AccessControl {
+    using SafeERC20 for IERC20;
     /// @dev Chainlink price feed (latestAnswer returns price with 8 decimals)
     AggregatorV3Interface public priceFeed;
+
+    /// @dev EIP-7528 canonical placeholder address used to represent ETH when an address is required.
+    address public constant ETH_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
     /// @dev The maximum USD amount of funds the bank can hold.
     uint256 public immutable maxUsdBankCap = 10000 * 10 ** 8;
@@ -22,11 +29,18 @@ contract KipuBank is AccessControl {
     uint256 public immutable usdWithdrawalLimit = 1000 * 10 ** 8;
     /// @dev The address of the contract's owner, set upon deployment.
     address public immutable ownerBank;
-    /// @dev The total amount of wei held by the contract (internal bank balance in wei).
-    uint256 private _kipuBankBalance;
+    /// @dev Per-token total balances held by the contract (token address -> amount).
+    mapping(address => uint256) private _tokenTotals;
 
-    /// @dev A mapping of addresses to their individual balances.
-    mapping(address => uint256) private _balances;
+    /// @dev Per-token per-account balances (token => account => amount).
+    mapping(address => mapping(address => uint256)) private _balances;
+
+    /// @dev Tracks which tokens are known to the bank (used to compute total USD exposure).
+    address[] public trackedTokens;
+    mapping(address => bool) private _isTracked;
+
+    /// @dev Per-token Chainlink price feed (token address -> Aggregator). For ETH use the `priceFeed` field.
+    mapping(address => AggregatorV3Interface) public tokenPriceFeed;
 
 
     /// @notice Error returned when a function is called by an address that is not the bank owner.
@@ -55,8 +69,9 @@ contract KipuBank is AccessControl {
     error TransferFailed();
 
 
-    event SuccessfulDeposit(address indexed account, uint256 amount);
-    event SuccessfulWithdrawal(address indexed account, uint256 amount);
+    /// @dev token is the token address or ETH_ADDRESS for native ETH
+    event SuccessfulDeposit(address indexed account, address indexed token, uint256 amount);
+    event SuccessfulWithdrawal(address indexed account, address indexed token, uint256 amount);
     event AdminAdded(address indexed account);
     event AdminRemoved(address indexed account);
     event AdminRecovery(address indexed account, uint256 oldBalance, uint256 newBalance);
@@ -91,57 +106,73 @@ contract KipuBank is AccessControl {
     _setRoleAdmin(ADMIN_ROLE, OWNER_ROLE);
     }
 
-    /// @notice Allows a user to deposit Ether into the bank.
-    /// @dev The deposit is added to the user's balance and the bank's total balance.
+    /// @notice Deposit native ETH (use EIP-7528 ETH placeholder address in getters/events).
     function deposit() external payable {
-        if (msg.value <= 0) {
-            revert InvalidValue(msg.value);
-        }
-        // Convert current total and incoming deposit to USD (8 decimals) for cap check
-        uint256 currentUsd = weiToUsd(_kipuBankBalance);
+        if (msg.value == 0) revert InvalidValue(msg.value);
+
         uint256 depositUsd = weiToUsd(msg.value);
-        if (currentUsd + depositUsd > maxUsdBankCap) {
-            revert MaxBankCapReached(maxUsdBankCap - currentUsd);
+        if (totalBankUsd() + depositUsd > maxUsdBankCap) {
+            revert MaxBankCapReached(maxUsdBankCap - totalBankUsd());
         }
 
-        _balances[msg.sender] += msg.value;
-        _kipuBankBalance += msg.value;
+        _balances[ETH_ADDRESS][msg.sender] += msg.value;
+        _tokenTotals[ETH_ADDRESS] += msg.value;
+        _trackTokenIfNeeded(ETH_ADDRESS);
 
-
-        emit SuccessfulDeposit(msg.sender, msg.value);
+        emit SuccessfulDeposit(msg.sender, ETH_ADDRESS, msg.value);
     }
 
  
-    function withdraw(uint256 amount) external payable{
-        // amount is expected in wei
-        if (amount == 0) {
-            revert InvalidValue(amount);
-        }
-        if (amount > _balances[msg.sender]) {
-            revert InsufficientBalance(_balances[msg.sender]);
-        }
+    /// @notice Withdraw native ETH. `amount` is in wei.
+    function withdraw(uint256 amount) external {
+        if (amount == 0) revert InvalidValue(amount);
+        uint256 bal = _balances[ETH_ADDRESS][msg.sender];
+        if (amount > bal) revert InsufficientBalance(bal);
 
-        // Check USD equivalent using Chainlink price feed (price has 8 decimals)
-        int256 price = priceFeed.latestAnswer();
-        if (price <= 0) {
-            revert InvalidPrice(price);
-        }
-        // amount is in wei (1 ETH = 1e18 wei). To compute USD with 8 decimals:
-        // usd = (amount_in_wei * price) / 1e18
-        // where price has 8 decimals, so usd has 8 decimals.
-        uint256 usdValue = (uint256(price) * amount) / 1e18;
-        if (usdValue > usdWithdrawalLimit) {
-            revert ExceedsUsdLimit(usdValue, usdWithdrawalLimit);
-        }
-        _balances[msg.sender] -= amount;
-        _kipuBankBalance -= amount;
-        
+        uint256 usdValue = weiToUsd(amount);
+        if (usdValue > usdWithdrawalLimit) revert ExceedsUsdLimit(usdValue, usdWithdrawalLimit);
+
+        _balances[ETH_ADDRESS][msg.sender] = bal - amount;
+        _tokenTotals[ETH_ADDRESS] -= amount;
+
         (bool success, ) = payable(msg.sender).call{value: amount}("");
-        if (!success) {
-            revert TransferFailed();
+        if (!success) revert TransferFailed();
+
+        emit SuccessfulWithdrawal(msg.sender, ETH_ADDRESS, amount);
+    }
+
+    /// @notice Deposit ERC20 token. Caller must `approve` this contract beforehand.
+    function depositToken(address token, uint256 amount) external {
+        if (amount == 0) revert InvalidValue(amount);
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+
+        uint256 depositUsd = tokenAmountToUsd(token, amount);
+        if (totalBankUsd() + depositUsd > maxUsdBankCap) {
+            revert MaxBankCapReached(maxUsdBankCap - totalBankUsd());
         }
 
-        emit SuccessfulWithdrawal(msg.sender, amount);
+        _balances[token][msg.sender] += amount;
+        _tokenTotals[token] += amount;
+        _trackTokenIfNeeded(token);
+
+        emit SuccessfulDeposit(msg.sender, token, amount);
+    }
+
+    /// @notice Withdraw ERC20 token previously deposited.
+    function withdrawToken(address token, uint256 amount) external {
+        if (amount == 0) revert InvalidValue(amount);
+        uint256 bal = _balances[token][msg.sender];
+        if (amount > bal) revert InsufficientBalance(bal);
+
+        uint256 usdValue = tokenAmountToUsd(token, amount);
+        if (usdValue > usdWithdrawalLimit) revert ExceedsUsdLimit(usdValue, usdWithdrawalLimit);
+
+        _balances[token][msg.sender] = bal - amount;
+        _tokenTotals[token] -= amount;
+
+    IERC20(token).safeTransfer(msg.sender, amount);
+
+        emit SuccessfulWithdrawal(msg.sender, token, amount);
     }
 
     /// @dev A modifier that restricts a function's execution to accounts with OWNER_ROLE.
@@ -152,21 +183,27 @@ contract KipuBank is AccessControl {
         _;
     }
 
-    function currentBalance() external view onlyOwner returns (uint256 current) {
+    function currentBalance() external view onlyOwner returns (uint256) {
         // return the bank total balance expressed in USD with 8 decimals
-        return weiToUsd(_kipuBankBalance);
+        return totalBankUsd();
     }
 
     /// @dev A modifier that restricts a function's execution to the account owner or any account with ADMIN_ROLE.
-    modifier onlyAccountOwnerOrAdmin(address account) {
+    modifier onlyAccountOwnerOrAdmin(address token, address account) {
         if (msg.sender != account && !hasRole(ADMIN_ROLE, msg.sender)) {
             revert NotAccountOwner(msg.sender);
         }
         _;
     }
 
-    function getBalance(address account) external view onlyAccountOwnerOrAdmin(account) returns (uint256) {
-        return _balances[account];
+    /// @notice Returns the ETH balance (wei) for `account`.
+    function getBalance(address account) external view onlyAccountOwnerOrAdmin(ETH_ADDRESS, account) returns (uint256) {
+        return _balances[ETH_ADDRESS][account];
+    }
+
+    /// @notice Returns the token balance for `account` and `token`.
+    function getBalanceOf(address token, address account) external view onlyAccountOwnerOrAdmin(token, account) returns (uint256) {
+        return _balances[token][account];
     }
 
     /// @notice Owner-only: grant ADMIN_ROLE to an account.
@@ -181,30 +218,27 @@ contract KipuBank is AccessControl {
         emit AdminRemoved(account);
     }
 
-    /// @notice Admins can adjust a user's internal wei balance to help recover funds.
-    /// @dev Adjusts the total bank balance accordingly. Only callable by ADMIN_ROLE.
-    function recoverUserBalance(address account, uint256 newBalanceWei) external onlyRole(ADMIN_ROLE) {
-        uint256 old = _balances[account];
-        if (newBalanceWei > old) {
-            uint256 delta = newBalanceWei - old;
-            _balances[account] = newBalanceWei;
-            _kipuBankBalance += delta;
-        } else if (newBalanceWei < old) {
-            uint256 delta = old - newBalanceWei;
-            _balances[account] = newBalanceWei;
-            _kipuBankBalance -= delta;
+    /// @notice Admins can adjust a user's token balance to help recover funds. Token may be ETH_ADDRESS for native ETH.
+    function recoverUserBalance(address token, address account, uint256 newBalance) external onlyRole(ADMIN_ROLE) {
+        uint256 old = _balances[token][account];
+        if (newBalance > old) {
+            uint256 delta = newBalance - old;
+            _balances[token][account] = newBalance;
+            _tokenTotals[token] += delta;
+        } else if (newBalance < old) {
+            uint256 delta = old - newBalance;
+            _balances[token][account] = newBalance;
+            _tokenTotals[token] -= delta;
         } else {
-            // no change
             return;
         }
 
-        // Ensure bank cap is not violated after recovery (converted to USD)
-        uint256 bankUsd = weiToUsd(_kipuBankBalance);
-        if (bankUsd > maxUsdBankCap) {
-            revert MaxBankCapReached(maxUsdBankCap - bankUsd);
+        // Ensure bank cap is not violated after recovery
+        if (totalBankUsd() > maxUsdBankCap) {
+            revert MaxBankCapReached(maxUsdBankCap - totalBankUsd());
         }
 
-        emit AdminRecovery(account, old, newBalanceWei);
+        emit AdminRecovery(account, old, newBalance);
     }
 
     /// @notice Returns the latest ETH price in USD with 8 decimals (reverts if price <= 0).
@@ -225,8 +259,53 @@ contract KipuBank is AccessControl {
         usdValue = (price * amountWei) / 1e18;
     }
 
-    /// @notice Returns the USD value (8 decimals) of an account's internal balance. Restricted to account or owner.
-    function getBalanceInUsd(address account) external view onlyAccountOwnerOrAdmin(account) returns (uint256) {
-        return weiToUsd(_balances[account]);
+    /// @notice Convert token amount to USD (8 decimals). For ETH use `ETH_ADDRESS` and pass wei amount.
+    function tokenAmountToUsd(address token, uint256 amount) public view returns (uint256) {
+        if (token == ETH_ADDRESS) {
+            return weiToUsd(amount);
+        }
+        AggregatorV3Interface feed = tokenPriceFeed[token];
+        if (address(feed) == address(0)) revert InvalidPrice(0);
+        int256 price = feed.latestAnswer();
+        if (price <= 0) revert InvalidPrice(price);
+
+        uint8 decimals = 18;
+        // try to read token decimals if available
+        try IERC20Metadata(token).decimals() returns (uint8 d) {
+            decimals = d;
+        } catch {
+            decimals = 18; // fallback
+        }
+
+        // price has 8 decimals and amount has `decimals` decimals -> usd = price * amount / (10**decimals)
+        return (uint256(price) * amount) / (10 ** decimals);
+    }
+
+    /// @notice Returns total bank USD exposure summing all tracked tokens (8 decimals)
+    function totalBankUsd() public view returns (uint256 totalUsd) {
+        for (uint256 i = 0; i < trackedTokens.length; i++) {
+            address t = trackedTokens[i];
+            uint256 tot = _tokenTotals[t];
+            if (tot == 0) continue;
+            totalUsd += tokenAmountToUsd(t, tot);
+        }
+    }
+
+    /// @notice Owner can set a price feed for arbitrary tokens (token address -> aggregator).
+    function setTokenPriceFeed(address token, address aggregator) external onlyOwner {
+        tokenPriceFeed[token] = AggregatorV3Interface(aggregator);
+        _trackTokenIfNeeded(token);
+    }
+
+    function _trackTokenIfNeeded(address token) internal {
+        if (!_isTracked[token]) {
+            _isTracked[token] = true;
+            trackedTokens.push(token);
+        }
+    }
+
+    /// @notice Returns the USD value (8 decimals) of an account's internal balance for a given token. Restricted to account or admin.
+    function getBalanceInUsd(address token, address account) external view onlyAccountOwnerOrAdmin(token, account) returns (uint256) {
+        return tokenAmountToUsd(token, _balances[token][account]);
     }
 }
