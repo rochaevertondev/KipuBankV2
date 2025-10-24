@@ -7,11 +7,13 @@ A Solidity smart contract that simulates a simple decentralized bank with **depo
 The contract enforces a **maximum withdrawal per transaction** expressed in **USD** (8 decimals, compatible with Chainlink).
 
 - **`usdWithdrawalLimit`** (`public immutable`) — withdrawal limit: `1000 USD` (stored as `1000 * 10^8`).
+- **`nativePerTxCapWei`** (`public`) — optional per-transaction wei cap for ETH withdrawals (0 = no limit).
 - When a user calls `withdraw(amount)` (where `amount` is in wei), the contract:
-  1. Gets the ETH/USD price from Chainlink (`latestAnswer()`).
-  2. Converts the `amount` to USD:
+  1. Gets the ETH/USD price from Chainlink using `latestRoundData()` with full oracle validation (staleness check, roundId verification).
+  2. Converts the `amount` to USD with normalized decimals (supports any feed decimals):
     usdValue = (price * amount) / 1e18;
   3. Reverts with `ExceedsUsdLimit` if `usdValue > usdWithdrawalLimit`.
+  4. Reverts with `ExceedsWeiLimit` if wei cap is set and `amount > nativePerTxCapWei`.
 
  This ensures users cannot withdraw more than **$1000 USD** per transaction, regardless of ETH price fluctuations.
 
@@ -28,7 +30,7 @@ This contract uses OpenZeppelin AccessControl and defines two primary roles:
 
 - `ADMIN_ROLE` — role with a narrow, specific power: recover or adjust a user's internal balance when needed. 
     Functions controlled by `ADMIN_ROLE`:
-    - `recoverUserBalance(address account, uint256 newBalanceWei)` — admins can update an account's internal wei balance to help recover funds. This action emits `AdminRecovery` and adjusts the total internal bank balance accordingly.
+    - `recoverUserBalance(address token, address account, uint256 newBalance)` — admins can adjust an account's internal balance for any token (use `ETH_ADDRESS` for native ETH) to help recover funds. This action emits `AdminRecovery` and adjusts the total internal bank balance and USD cache accordingly.
 
 ---
 
@@ -44,12 +46,19 @@ This contract uses OpenZeppelin AccessControl and defines two primary roles:
 
 ## Other Features
 
-- `maxUsdBankCap` (public immutable) — total bank capacity limit in USD with 8 decimals (10,000 USD).
-The deposit() function converts both the incoming deposit and the total balance to USD before accepting new funds.
-- Internal balances are stored in wei (`_balances[address]` and `_kipuBankBalance`) to preserve ETH precision.
-- `getEthPrice()` — returns the current ETH price in USD (8 decimals) using Chainlink.
+- **`maxUsdBankCap`** (public immutable) — total bank capacity limit in USD with 8 decimals (10,000 USD).
+The deposit functions convert both the incoming deposit and the total balance to USD before accepting new funds.
+- **Deposit/Withdraw counters** — `depositCount` and `withdrawCount` track total number of operations.
+- **O(1) total USD tracking** — `_totalBankUsdCache` maintains running total for instant `totalBankUsd()` queries; `recalculateTotalBankUsd()` available for verification.
+- **Oracle hygiene** — all price feeds validated with `latestRoundData()`: checks `answer > 0`, `answeredInRound >= roundId`, and `updatedAt` within 1 hour (MAX_ORACLE_AGE).
+- **Feed decimals normalization** — supports Chainlink feeds with any decimals (8, 18, etc.) via `_normalizePriceTo8Decimals()` helper.
+- **Fee-on-transfer token support** — `depositToken()` uses balance delta to handle tokens with transfer fees correctly.
+- Internal balances are stored in native token units (`_balances[token][account]` and `_tokenTotals[token]`) to preserve precision.
+- `getEthPrice()` — returns the current ETH price in USD (8 decimals) using Chainlink with full validation.
 - `weiToUsd(uint256)` — converts an amount in wei to its equivalent USD value (8 decimals).
-- `getBalanceInUsd(address)` — returns an account’s balance in USD (8 decimals), restricted to the account owner or the bank owner.
+- `tokenAmountToUsd(address, uint256)` — converts any token amount to USD (supports ETH via `ETH_ADDRESS`).
+- `getBalanceInUsd(address token, address account)` — returns an account's token balance in USD (8 decimals), restricted to the account owner or admins.
+- `setNativePerTxCapWei(uint256)` — owner can set/update the per-transaction wei cap for ETH withdrawals.
 
 ---
 
@@ -80,8 +89,8 @@ The deposit() function converts both the incoming deposit and the total balance 
         2. Verify: call `hasRole(ADMIN_ROLE(), targetAddress)` and expect `false`.
     - Testing admin-only recovery:
         1. After granting `ADMIN_ROLE` to an address, switch the active Remix account to that admin address in the top-right account selector.
-        2. Call `recoverUserBalance(address account, uint256 newBalanceWei)` to change a user's internal wei balance.
-        3. Verify the change by calling `getBalance(targetAccount)` or `getBalanceInUsd(targetAccount)`.
+        2. Call `recoverUserBalance(address token, address account, uint256 newBalance)` to change a user's internal balance for a specific token (use `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` for ETH).
+        3. Verify the change by calling `getBalanceOf(token, targetAccount)` or `getBalanceInUsd(token, targetAccount)`.
         4. Try calling `recoverUserBalance` from a non-admin account — it should revert (access denied).
     - Testing owner-only protection:
         1. From a non-owner account, try to call `addAdmin(address)` or `removeAdmin(address)` and confirm the transaction reverts.
