@@ -84,7 +84,7 @@ forge coverage
 - `getBalance(address)` - View ETH balance
 - `getBalanceInUsd(address, address)` - View balance in USD
 
-**📖 [Read the full contract documentation](./wiki/Contrato-KipuBank.md)**
+**📖 [Read the full contract documentation](https://github.com/rochaevertondev/KipuBankV2/wiki)**
 
 ## 🌐 Deployment
 
@@ -109,13 +109,13 @@ forge script script/Deploy.s.sol --rpc-url sepolia --broadcast --verify
 
 Start here if you're new to Solidity or Foundry:
 
-1. 📖 **[Contract Guide](./wiki/Contrato-KipuBank.md)** - Complete contract explanation
+1. 📖 **[Contract Guide](https://github.com/rochaevertondev/KipuBankV2/wiki/Contrato%E2%80%90KipuBank)** - Complete contract explanation
    - Architecture and design patterns
    - Function-by-function breakdown
    - Security features explained
    - Code examples with calculations
 
-2. 🧪 **[Testing Guide](./wiki/Testes-KipuBank.md)** - Learn testing with Foundry
+2. 🧪 **[Testing Guide](https://github.com/rochaevertondev/KipuBankV2/wiki/Testes%E2%80%90KipuBank)** - Learn testing with Foundry
    - How to write tests in Solidity
    - Understanding mocks and fixtures
    - Foundry cheatcodes reference
