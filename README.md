@@ -6,7 +6,7 @@ A secure, multi-token DeFi vault with USD-based limits powered by Chainlink orac
 [![Solidity](https://img.shields.io/badge/Solidity-0.8.20-blue.svg)](https://docs.soliditylang.org/)
 [![Foundry](https://img.shields.io/badge/Foundry-Latest-green.svg)](https://book.getfoundry.sh/)
 
-> 📚 **[Complete Documentation](https://github.com/rochaevertondev/KipuBankV2/wiki)** | 📖 **[Contract Guide](https://github.com/rochaevertondev/KipuBankV2/wiki/Contrato%E2%80%90KipuBank)** | 🧪 **[Testing Guide](https://github.com/rochaevertondev/KipuBankV2/wiki/Testes%E2%80%90KipuBank)**
+> 📚 **[Complete Documentation](https://github.com/rochaevertondev/KipuBankV2/wiki)** 
 
 ## ✨ Features
 
@@ -19,50 +19,6 @@ A secure, multi-token DeFi vault with USD-based limits powered by Chainlink orac
 - 📜 **EIP-7528 compliant** - Canonical ETH address standard
 - 🔢 **Fee-on-transfer support** - Handles tokens with transfer fees
 
-## 🚀 Quick Start
-
-### Prerequisites
-
-- [Foundry](https://book.getfoundry.sh/getting-started/installation)
-- Solidity ^0.8.20
-
-### Installation
-
-```bash
-# Clone repository
-git clone https://github.com/rochaevertondev/KipuBankV2.git
-cd KipuBankV2
-
-# Install dependencies
-forge install
-
-# Compile contracts
-forge build
-
-# Run tests
-forge test
-```
-
-## 🧪 Testing
-
-```bash
-# Run all tests
-forge test
-
-# Run with verbosity
-forge test -vv
-
-# Run specific test
-forge test --match-test testDeposit
-
-# Generate gas report
-forge test --gas-report
-
-# Coverage report
-forge coverage
-```
-
-**Current test coverage:** 4/4 tests passing ✅
 
 ## 📋 Contract Overview
 
@@ -86,42 +42,6 @@ forge coverage
 
 **📖 [Read the full contract documentation](https://github.com/rochaevertondev/KipuBankV2/wiki)**
 
-## 🌐 Deployment
-
-### Sepolia Testnet
-
-**Chainlink Price Feeds:**
-- ETH/USD: `0x694AA1769357215DE4FAC081bf1f309aDC325306`
-- LINK/USD: `0xc59E3633BAAC79493d908e63626716e204A45EdF`
-
-```bash
-# Configure environment
-cp .env.example .env
-# Add PRIVATE_KEY, SEPOLIA_RPC_URL, ETHERSCAN_API_KEY
-
-# Deploy and verify
-forge script script/Deploy.s.sol --rpc-url sepolia --broadcast --verify
-```
-
-## 📚 Documentation
-
-### For Beginners
-
-Start here if you're new to Solidity or Foundry:
-
-1. 📖 **[Contract Guide](https://github.com/rochaevertondev/KipuBankV2/wiki/Contrato%E2%80%90KipuBank)** - Complete contract explanation
-   - Architecture and design patterns
-   - Function-by-function breakdown
-   - Security features explained
-   - Code examples with calculations
-
-2. 🧪 **[Testing Guide](https://github.com/rochaevertondev/KipuBankV2/wiki/Testes%E2%80%90KipuBank)** - Learn testing with Foundry
-   - How to write tests in Solidity
-   - Understanding mocks and fixtures
-   - Foundry cheatcodes reference
-   - AAA pattern and best practices
-
-3. 📚 **[Wiki Home](https://github.com/rochaevertondev/KipuBankV2/wiki)** - Complete index and quick reference
 
 ### Advanced Topics
 
