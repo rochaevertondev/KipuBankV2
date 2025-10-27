@@ -6,7 +6,7 @@ A secure, multi-token DeFi vault with USD-based limits powered by Chainlink orac
 [![Solidity](https://img.shields.io/badge/Solidity-0.8.20-blue.svg)](https://docs.soliditylang.org/)
 [![Foundry](https://img.shields.io/badge/Foundry-Latest-green.svg)](https://book.getfoundry.sh/)
 
-> 📚 **[Complete Documentation]([./wiki/README.md](https://github.com/rochaevertondev/KipuBankV2/wiki))** | 📖 **[Contract Guide]([./wiki/Contrato-KipuBank.md](https://github.com/rochaevertondev/KipuBankV2/wiki/Contrato%E2%80%90KipuBank))** | 🧪 **[Testing Guide]([./wiki/Testes-KipuBank.md](https://github.com/rochaevertondev/KipuBankV2/wiki/Testes%E2%80%90KipuBank))**
+> 📚 **[Complete Documentation](https://github.com/rochaevertondev/KipuBankV2/wiki)** | 📖 **[Contract Guide](https://github.com/rochaevertondev/KipuBankV2/wiki/Contrato%E2%80%90KipuBank)** | 🧪 **[Testing Guide](https://github.com/rochaevertondev/KipuBankV2/wiki/Testes%E2%80%90KipuBank)**
 
 ## ✨ Features
 
