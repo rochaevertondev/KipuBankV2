@@ -121,7 +121,7 @@ Start here if you're new to Solidity or Foundry:
    - Foundry cheatcodes reference
    - AAA pattern and best practices
 
-3. 📚 **[Wiki Home](./wiki/README.md)** - Complete index and quick reference
+3. 📚 **[Wiki Home](https://github.com/rochaevertondev/KipuBankV2/wiki)** - Complete index and quick reference
 
 ### Advanced Topics
 
